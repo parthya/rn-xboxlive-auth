@@ -1,7 +1,7 @@
-import * as request from 'request';
+import * as request from 'superagent';
 import * as XboxLiveAuthError from './errors';
-import { readFileSync } from 'fs';
-import { stringify } from 'querystring';
+import { readFileSync } from 'react-native-fs';
+import { stringify } from 'query-string';
 
 import {
 	LiveEndpoints,
