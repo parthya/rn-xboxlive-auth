@@ -9,16 +9,13 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const request = require("superagent");
+const agent = request.agent();
 const XboxLiveAuthError = require("./errors");
 const querystring_1 = require("query-string");
 const main_1 = require("./__typings__/main");
 const { version } = require("../../package.json");
 const USER_AGENT = `Mozilla/5.0 (XboxReplay; XboxLiveAuth ${version}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36`;
-const BASE_HEADERS = {
-    Accept: 'text/html; charset=utf-8',
-    'Accept-Language': 'en-US',
-    'User-Agent': USER_AGENT
-};
+
 const _getMatchForIndex = (entry, regex, index = 0) => {
     const match = entry.match(regex);
     if (match === null)
@@ -28,7 +25,6 @@ const _getMatchForIndex = (entry, regex, index = 0) => {
     return String(match[index] || '');
 };
 const _preAuth = () => new Promise((resolve, reject) => {
-    const jar = request.jar();
     const authorizeQuery = {
         client_id: '0000000048093EE3',
         redirect_uri: 'https://login.live.com/oauth20_desktop.srf',
@@ -37,104 +33,128 @@ const _preAuth = () => new Promise((resolve, reject) => {
         display: 'touch',
         locale: 'en'
     };
-    request({
-        uri: main_1.LiveEndpoints.Authorize +
+
+    agent
+      .get(main_1.LiveEndpoints.Authorize +
             '?' +
-            unescape(querystring_1.stringify(authorizeQuery)),
-        headers: BASE_HEADERS,
-        jar
-    }, (err, _, body) => {
-        if (err)
-            return reject(XboxLiveAuthError.internal(err.message));
-        const matches = {
-            PPFT: _getMatchForIndex(body, /sFTTag:'.*value=\"(.*)\"\/>'/, 1),
-            urlPost: _getMatchForIndex(body, /urlPost:'([A-Za-z0-9:\?_\-\.&\\/=]+)/, 1)
-        };
-        if (matches.PPFT === null) {
+            unescape(querystring_1.stringify(authorizeQuery)))
+      .accept('text/html; charset=utf-8')
+      .set('Accept-Language','en-US')
+      .set('User-Agent',USER_AGENT)
+      .then(res => {
+         const matches = {
+            PPFT: _getMatchForIndex(res.text, /sFTTag:'.*value=\"(.*)\"\/>'/, 1),
+            urlPost: _getMatchForIndex(res.text, /urlPost:'([A-Za-z0-9:\?_\-\.&\\/=]+)/, 1)
+          };
+          if (matches.PPFT === null) {
             return reject(XboxLiveAuthError.matchError('Cannot match "PPFT" parameter'));
-        }
-        else if (matches.urlPost === null) {
+          }
+          else if (matches.urlPost === null) {
             return reject(XboxLiveAuthError.matchError('Cannot match "urlPost" parameter'));
-        }
-        return resolve({
-            jar,
+          }
+
+          return resolve({
+            set_cookie: res.headers['set-cookie'],
             matches: matches
-        });
-    });
+          });
+      })
+      .catch(err => {
+         if (err)
+            return reject(XboxLiveAuthError.internal(err.message));
+      });
 });
+
 const _logUser = (preAuthResponse, credentials) => new Promise((resolve, reject) => {
-    request({
-        uri: preAuthResponse.matches.urlPost,
-        method: 'POST',
-        followRedirect: false,
-        headers: Object.assign({}, BASE_HEADERS, { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: preAuthResponse.jar.getCookieString(main_1.LiveEndpoints.Authorize) }),
-        body: querystring_1.stringify({
-            login: credentials.email,
-            loginfmt: credentials.email,
-            passwd: credentials.password,
-            PPFT: preAuthResponse.matches.PPFT
-        })
-    }, (err, response) => {
+    agent
+      .post(preAuthResponse.matches.urlPost)
+      .send(`login=${credentials.email}`)
+      .send(`loginfmt=${credentials.email}`)
+      .send(`passwd=${credentials.password}`)
+      .send(`PPFT=${preAuthResponse.matches.PPFT}`)
+      .accept('text/html; charset=utf-8')
+      .set('Accept-Language','en-US')
+      .set('User-Agent',USER_AGENT)
+      .set('Content-Type', 'application/x-www-form-urlencoded')
+      .set('Cookie', preAuthResponse.set_cookie)
+      .then(res => {
+          const responseURL = res.req.xhr.responseURL;
+          if (responseURL === void 0) {
+              return reject(XboxLiveAuthError.invalidCredentials());
+          }
+          const matches = {
+              accessToken: _getMatchForIndex(responseURL, /access_token=(.+?)&/, 1),
+              refreshToken: _getMatchForIndex(responseURL, /refresh_token=(.+?)&/, 1)
+          };
+          if (matches.accessToken === null) {
+              return reject(XboxLiveAuthError.matchError('Cannot match "access_token" parameter'));
+          }
+          return resolve(matches);
+      })
+      .catch(err => {
+        console.log(err);
         if (err)
             return reject(XboxLiveAuthError.internal(err.message));
-        const location = response.headers.location;
-        if (location === void 0) {
-            return reject(XboxLiveAuthError.invalidCredentials());
-        }
-        const matches = {
-            accessToken: _getMatchForIndex(location, /access_token=(.+?)&/, 1),
-            refreshToken: _getMatchForIndex(location, /refresh_token=(.+?)&/, 1)
-        };
-        if (matches.accessToken === null) {
-            return reject(XboxLiveAuthError.matchError('Cannot match "access_token" parameter'));
-        }
-        return resolve(matches);
-    });
+      });
 });
+
 exports.exchangeAccessTokenForUserToken = (accessToken) => new Promise((resolve, reject) => {
-    request({
-        uri: main_1.XboxLiveEndpoints.UserAuthenticate,
-        method: 'POST',
-        headers: Object.assign({}, BASE_HEADERS, { 'x-xbl-contract-version': 0 }),
-        json: {
-            RelyingParty: 'http://auth.xboxlive.com',
-            TokenType: 'JWT',
-            Properties: {
-                AuthMethod: 'RPS',
-                SiteName: 'user.auth.xboxlive.com',
-                RpsTicket: accessToken
-            }
+  agent
+    .post(main_1.XboxLiveEndpoints.UserAuthenticate)
+    .send({
+        RelyingParty: 'http://auth.xboxlive.com',
+        TokenType: 'JWT',
+        Properties: {
+            AuthMethod: 'RPS',
+            SiteName: 'user.auth.xboxlive.com',
+            RpsTicket: accessToken
         }
-    }, (err, response, body) => {
-        if (err)
-            return reject(XboxLiveAuthError.internal(err.message));
-        else if (response.statusCode !== 200)
-            return reject(XboxLiveAuthError.exchangeFailure('Cannot exchange "accessToken"'));
-        return resolve(body.Token);
+    })
+    .accept('text/html; charset=utf-8')
+    .set('Accept-Language','en-US')
+    .set('User-Agent',USER_AGENT)
+    .set({'x-xbl-contract-version': 0})
+    .then(res => {
+      if (res.statusCode !== 200) {
+        return reject(XboxLiveAuthError.exchangeFailure('Cannot exchange "accessToken"'));
+      }
+      const body = JSON.parse(res.text);
+      return resolve(body.Token);
+    })
+    .catch(err => {
+      if (err)
+          return reject(XboxLiveAuthError.internal(err.message));
     });
 });
+
 exports.exchangeUserTokenForXSTSIdentity = (userToken, XSTSRelyingParty = 'http://xboxlive.com') => new Promise((resolve, reject) => {
-    request({
-        uri: main_1.XboxLiveEndpoints.XSTSAuthorize,
-        method: 'POST',
-        headers: Object.assign({}, BASE_HEADERS, { 'x-xbl-contract-version': 0 }),
-        json: {
-            RelyingParty: XSTSRelyingParty,
-            TokenType: 'JWT',
-            Properties: {
-                UserTokens: [userToken],
-                SandboxId: 'RETAIL'
-            }
+  agent
+    .post(main_1.XboxLiveEndpoints.XSTSAuthorize)
+    .send({
+        RelyingParty: XSTSRelyingParty,
+        TokenType: 'JWT',
+        Properties: {
+            UserTokens: [userToken],
+            SandboxId: 'RETAIL'
         }
-    }, (err, response, body) => {
-        if (err)
-            return reject(XboxLiveAuthError.internal(err.message));
-        else if (response.statusCode !== 200)
-            return reject(XboxLiveAuthError.exchangeFailure('Cannot exchange "userToken"'));
-        return resolve({
-            userHash: String(body.DisplayClaims.xui[0].uhs),
-            XSTSToken: String(body.Token)
-        });
+    })
+    .accept('text/html; charset=utf-8')
+    .set('Accept-Language','en-US')
+    .set('User-Agent',USER_AGENT)
+    .set({'x-xbl-contract-version': 0})
+    .then(res => {
+      if (res.statusCode !== 200) {
+        return reject(XboxLiveAuthError.exchangeFailure('Cannot exchange "userToken"'));
+      }
+
+      const body = JSON.parse(res.text);
+      return resolve({
+          userHash: String(body.DisplayClaims.xui[0].uhs),
+          XSTSToken: String(body.Token)
+      });
+    })
+    .catch(err => {
+      if (err)
+          return reject(XboxLiveAuthError.internal(err.message));
     });
 });
 exports.authenticate = (email, password, options = {}) => __awaiter(this, void 0, void 0, function* () {
