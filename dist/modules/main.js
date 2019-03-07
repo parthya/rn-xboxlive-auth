@@ -10,10 +10,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 const request = require("superagent");
 const XboxLiveAuthError = require("./errors");
-const fs_1 = require("react-native-fs");
 const querystring_1 = require("query-string");
 const main_1 = require("./__typings__/main");
-const { version } = JSON.parse(fs_1.readFileSync('package.json', 'utf-8'));
+const { version } = require("../../package.json");
 const USER_AGENT = `Mozilla/5.0 (XboxReplay; XboxLiveAuth ${version}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36`;
 const BASE_HEADERS = {
     Accept: 'text/html; charset=utf-8',
